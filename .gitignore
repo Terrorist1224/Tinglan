@@ -1,0 +1,60 @@
+# Python environments and caches
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local data, media, models, tools and diagnostics
+/.tmp/
+/data/
+/models/
+/tools/
+/record/
+*.sqlite*
+*.db
+*.db-*
+*.log
+*.dmp
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+*.token
+/secrets/
+/private/
+
+# Node, build outputs and test reports
+node_modules/
+/frontend/dist/
+*.tsbuildinfo
+/test-results/
+/frontend/test-results/
+/playwright-report/
+/frontend/playwright-report/
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

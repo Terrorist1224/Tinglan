@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import json
 import time
 
@@ -37,7 +38,7 @@ def insert_task(name, subtitles=True, params=None):
 
 
 def test_settings_defaults_and_new_task_snapshot(client, monkeypatch):
-    from backend import main
+    from backend.routes import tasks as main
     monkeypatch.setattr(main, "probe", lambda path: {"duration": 1, "audio": [{"index": 0, "default": True}], "subtitles": [], "video": None})
     assert client.get("/api/settings").json()["default_diarize"] is True
     assert client.get("/api/settings").json()["default_auto_polish_translate"] is False
@@ -66,7 +67,7 @@ def test_queue_fifo_by_start_request(task, monkeypatch):
         gate.wait(5)
         return {r["id"]: "ok" for r in batch}
 
-    monkeypatch.setattr(mod, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     settings = {"base_url": "https://example.invalid/v1", "model": "test"}
     assert engine.start(a, "translate", settings, "key")["status"] == "started"
@@ -96,7 +97,7 @@ def test_two_channels_can_run_different_tasks(task, monkeypatch):
     engine = Engine()
 
     monkeypatch.setattr(engine, "worker", fake_worker)
-    monkeypatch.setattr(mod, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     assert engine.start(local_task, "transcribe")["channel"] == "local"
     assert engine.start(cloud_task, "translate", {"base_url": "https://example.invalid/v1", "model": "test"}, "key")["channel"] == "cloud"
     assert engine.channels["local"].active == local_task
@@ -114,7 +115,7 @@ def test_queued_task_control_removes_only_that_task(task, monkeypatch):
         gate.wait(5)
         return {r["id"]: "ok" for r in batch}
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     settings = {"base_url": "https://example.invalid/v1", "model": "test"}
     engine.start(task, "translate", settings, "key")
@@ -205,7 +206,9 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
     t4 = insert_task("T4", subtitles=False)
     t5 = insert_task("T5", subtitles=False)
 
+    t1_local_gate = threading.Event()
     t1_cloud_gate = threading.Event()
+    t1_cloud_started = threading.Event()
     t1_local_done = threading.Event()
     t2_local_gate = threading.Event()
 
@@ -214,6 +217,7 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
 
     def fake_worker(self, task, phase, ids):
         if task["id"] == t1:
+            assert t1_local_gate.wait(5)
             if not db.subtitles(t1):
                 with db.connect(write=True) as conn:
                     conn.execute("INSERT INTO subtitles(id,task_id,start,end,source,original) VALUES(?,?,?,?,?,?)", (db.ident(), t1, 0, 1000, "hello", "hello"))
@@ -223,6 +227,7 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
 
     def fake_process(self, task, phase, settings, key, ids, overwrite):
         if task["id"] == t1:
+            t1_cloud_started.set()
             t1_cloud_gate.wait(5)
 
     monkeypatch.setattr(engine_module.Engine, "worker", fake_worker)
@@ -245,8 +250,9 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
     assert engine.queue_state(t5)["queue_rank"] == 5
 
     # 等待 T1 本地转录完成并转入云端翻译
+    t1_local_gate.set()
     assert t1_local_done.wait(5)
-    time.sleep(0.1)
+    assert t1_cloud_started.wait(5)
 
     # T1 进入云端处理(rank仍为1)，T2 开始转录(rank仍为2)，T3~T5 保持 3, 4, 5
     assert engine.queue_state(t1)["queue_rank"] == 1
@@ -259,7 +265,7 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
 
     # 放行 T1 云端完成
     t1_cloud_gate.set()
-    time.sleep(0.1)
+    assert engine.wait_idle(channel="cloud", timeout=5)
 
     # T1 全部结束：T1 退出编号(rank=None)，T2 成为 1，T3 成为 2，T4 成为 3，T5 成为 4
     assert engine.queue_state(t1)["queue_rank"] is None
@@ -287,3 +293,54 @@ def test_five_tasks_queue_rank_lifecycle(monkeypatch):
     engine.control(t5, "cancel")
     engine.control(t3, "cancel")
     assert engine.wait_idle(timeout=5)
+
+
+def test_local_cloud_handoff_does_not_temporarily_drop_queue_rank(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    task = insert_task("handoff", subtitles=True, params={"audio_track": 0, "device": "cpu", "language": "en", "diarize": False, "auto_polish_translate": True})
+    reading = threading.Event()
+    release_settings = threading.Event()
+    release_cloud = threading.Event()
+    observing = threading.Event()
+    observed = threading.Event()
+    def worker(self, item, phase, ids):
+        with db.connect(write=True) as conn:
+            conn.execute(
+                "INSERT INTO subtitles(id,task_id,start,end,source,original) VALUES(?,?,?,?,?,?)",
+                (db.ident(), item["id"], 0, 1000, "hello", "hello"),
+            )
+
+    monkeypatch.setattr(engine_module.Engine, "worker", worker)
+    monkeypatch.setattr(engine_module.Engine, "process_llm", lambda *args: release_cloud.wait(5))
+
+    def settings(self):
+        reading.set()
+        assert release_settings.wait(5)
+        return {"base_url": "https://example.invalid/v1", "model": "test"}, "key"
+
+    monkeypatch.setattr(engine_module.Engine, "resolve_settings", settings)
+    engine = Engine()
+
+    def observe():
+        observing.set()
+        state = engine.queue_state(task)
+        observed.set()
+        return state
+
+    with ThreadPoolExecutor(1) as pool:
+        try:
+            engine.start(task, "transcribe")
+            assert reading.wait(5)
+            future = pool.submit(observe)
+            assert observing.wait(5)
+            assert not observed.wait(0.05)
+            release_settings.set()
+            state = future.result(timeout=5)
+            assert state["queue_rank"] == 1
+            assert state["queue_channel"] == "cloud"
+        finally:
+            release_settings.set()
+            release_cloud.set()
+            assert engine.wait_idle(timeout=5)

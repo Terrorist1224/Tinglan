@@ -1,0 +1,3 @@
+-r core.in
+pytest==8.4.2
+srt==3.5.3

@@ -52,7 +52,10 @@ def segment_row(segment, offset, duration, unit):
             {
                 "word": w.word,
                 "start": max(0, round((offset + w.start) * 1000)),
-                "end": round(min(duration, offset + w.end) * 1000),
+                "end": max(
+                    max(0, round((offset + w.start) * 1000)) + 100,
+                    round(min(duration, offset + w.end) * 1000),
+                ),
                 "prob": round(float(getattr(w, "probability", 1.0)), 3),
             }
             for w in segment.words
@@ -71,6 +74,15 @@ def segment_row(segment, offset, duration, unit):
             end = min(core_end, words[-1]["end"] / 1000.0)
         else:
             words = all_words
+            if words:
+                start = max(core_start, min(words[0]["start"] / 1000.0, end - 0.2))
+                end = min(
+                    core_end,
+                    max(
+                        words[-1]["end"] / 1000.0,
+                        min(offset + segment.end, words[-1]["end"] / 1000.0 + 0.3),
+                    ),
+                )
     elif not core_start <= (start + end) / 2 < core_end:
         return None
 
@@ -81,9 +93,11 @@ def segment_row(segment, offset, duration, unit):
         reasons.append("语音或文字需检查")
     if boundary:
         reasons.append("分块交界，请回放确认")
+    s_ms = max(0, round(start * 1000))
+    e_ms = max(s_ms + 300, round(end * 1000))
     return {
-        "start": max(0, round(start * 1000)),
-        "end": round(end * 1000),
+        "start": s_ms,
+        "end": e_ms,
         "source": text,
         "words": words,
         "review": "；".join(reasons),
@@ -157,7 +171,7 @@ def _split_fallback_text(base):
             p_end = base["end"]
         results.append({
             "start": p_start,
-            "end": max(p_start + 200, p_end),
+            "end": max(p_start + 300, p_end),
             "source": piece.strip(),
             "words": [],
             "review": clean_review,
@@ -224,9 +238,11 @@ def split_row_if_long(base):
             chunk_text = "".join(w["word"] for w in chunk).strip()
             if not chunk_text:
                 continue
+            c_start = chunk[0]["start"]
+            c_end = max(chunk[-1]["end"], c_start + 300)
             results.append({
-                "start": chunk[0]["start"],
-                "end": chunk[-1]["end"],
+                "start": c_start,
+                "end": c_end,
                 "source": chunk_text,
                 "words": chunk,
                 "review": clean_review,
@@ -242,6 +258,19 @@ def split_segment_rows(segment, offset, duration, unit):
     if not base:
         return []
     return split_row_if_long(base)
+
+
+def normalize_audio_samples(samples):
+    """自适应峰值放大弱音音频，避免轻声与微弱语音被静音门槛误切。"""
+    # shortcut: 线性峰值归一化未引入多段动态压限，高底噪环境需配合降噪或后续动态降噪升级
+    if samples is None or len(samples) == 0:
+        return samples
+    import numpy as np
+
+    max_val = float(np.max(np.abs(samples)))
+    if 1e-4 < max_val < 0.7:
+        return samples * (0.95 / max_val)
+    return samples
 
 
 # 执行 Whisper 语音识别，支持断点恢复跳过已完成单元，逐分块输出识别结果与检查点
@@ -302,12 +331,19 @@ def transcribe(request):
                 )
                 / 32768.0
             )
+        samples = normalize_audio_samples(samples)
         segments, info = model.transcribe(
             samples,
             language=language,
             task="transcribe",
             beam_size=5,
             vad_filter=True,
+            vad_parameters=dict(
+                threshold=0.35,
+                min_silence_duration_ms=800,
+                speech_pad_ms=250,
+            ),
+            no_speech_threshold=0.8,
             word_timestamps=True,
             initial_prompt=task["params"].get("glossary") or None,
             condition_on_previous_text=True,

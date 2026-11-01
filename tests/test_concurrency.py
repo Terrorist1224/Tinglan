@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import json
 import time
 import httpx
@@ -128,7 +129,7 @@ def test_engine_concurrency_ceiling_and_out_of_order(client, task, monkeypatch):
         active_count -= 1
         return {s["id"]: f"译_{s['source']}" for s in batch}
 
-    monkeypatch.setattr(engine_mod, "translate_batch", mock_translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_translate)
 
     engine = Engine()
     settings = {
@@ -184,8 +185,8 @@ def test_polish_translate_combo_ordering(client, task, monkeypatch):
         time.sleep(0.02)
         return {s["id"]: f"Translated {s['source']}" for s in batch}
 
-    monkeypatch.setattr(engine_mod, "polish_batch", mock_polish)
-    monkeypatch.setattr(engine_mod, "translate_batch", mock_translate)
+    monkeypatch.setattr(cloud_processing, "polish_batch", mock_polish)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_translate)
 
     engine = Engine()
     settings = {
@@ -227,7 +228,7 @@ def test_auth_failure_halts_dispatch(client, task, monkeypatch):
         call_count += 1
         raise PermissionError("API 认证失败，请检查密钥和模型权限")
 
-    monkeypatch.setattr(engine_mod, "translate_batch", mock_translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_translate)
 
     engine = Engine()
     settings = {
@@ -269,7 +270,7 @@ def test_pause_and_cancel_in_flight(client, task, monkeypatch):
         time.sleep(0.05)
         return {s["id"]: f"译_{s['source']}" for s in batch}
 
-    monkeypatch.setattr(engine_mod, "translate_batch", slow_translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", slow_translate)
 
     # 1. 测试 Pause: 收尾已发出的请求，保存结果，停止后续派发
     engine = Engine()
@@ -337,7 +338,7 @@ def test_engine_reduces_concurrency_and_recovers_after_throttle(client, task, mo
             with lock:
                 active -= 1
 
-    monkeypatch.setattr(engine_mod, "translate_batch", mock_translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_translate)
     engine = Engine()
     engine.start(
         task,

@@ -140,7 +140,7 @@ def test_audio_only_probe_and_extraction(client):
 
 
 def test_disk_full_mid_upload_preserves_existing_task(client, task, monkeypatch):
-    import backend.main as main
+    from backend.routes import tasks as main
     from backend import db
 
     before = set(DATA.iterdir())
@@ -207,7 +207,7 @@ def test_import_path_reads_source_without_copy_and_delete_keeps_source(client, s
 
 def test_pick_file_cancel_and_unavailable_tk(client, monkeypatch):
     import subprocess
-    import backend.main as main
+    from backend.routes import tasks as main
     from types import SimpleNamespace
 
     # 1. 模拟用户取消选择

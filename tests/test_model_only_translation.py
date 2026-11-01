@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import json
 import time
 
@@ -107,7 +108,7 @@ def test_refused_batch_does_not_block_other_batches(task, monkeypatch):
             raise TranslationError("上游模型拒绝翻译该批次", refusal=True)
         return {batch[0]["id"]: f"译文_{batch[0]['id']}"}
 
-    monkeypatch.setattr(engine_module, "translate_batch", mock_batch)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_batch)
     engine = Engine()
     engine.start(task, "translate", {"base_url": "https://api.example.com/v1", "model": "test"}, "key")
     limit = time.monotonic() + 5
@@ -151,7 +152,7 @@ def test_resume_preserves_uncompleted_subtitles(task, monkeypatch):
         seen.update(settings)
         return {batch[0]["id"]: "成功"}
 
-    monkeypatch.setattr(engine_module, "translate_batch", mock_batch)
+    monkeypatch.setattr(cloud_processing, "translate_batch", mock_batch)
     engine = Engine()
     engine.start(
         task,

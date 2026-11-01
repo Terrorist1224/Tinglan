@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = ".tmp/pytest-cache"
+addopts = "--basetemp=.tmp/pytest-tmp"

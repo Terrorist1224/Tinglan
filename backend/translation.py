@@ -10,7 +10,8 @@ import httpx
 
 DEFAULT_POLISH_PROMPT = (
     "清理语气词（如‘那个、然后、嗯、啊’）、口吃与无意义重复，纠正错别字，理顺标点与语序；"
-    "保留原意与说话人语气，严禁无故扩写或擅自总结。"
+    "保留原意与说话人语气，严禁无故扩写或擅自总结；"
+    "若整句仅为语气词或感叹词，请保留原文字，严禁返回空文本。"
 )
 DEFAULT_TRANSLATE_PROMPT = (
     "表达自然，结合语境、术语和人物语气，保留原意与事实，不添加解释，不机械逐字翻译。"
@@ -103,10 +104,10 @@ def _raise_refusal(message):
 # 2. ID 完整性与唯一性校验：返回结果必须严格包含所有 expected ID，且不得重复或遗漏；
 #    若模型少翻或多翻，必须判定为失败并抛出异常，触发上层重试或分批拆解，严禁行号错位污染字幕。
 def _normalize_id(value):
-    return value.strip().lower().replace("-", "")
+    return str(value).strip().lower().replace("-", "")
 
 
-def validate_response(content, expected):
+def validate_response(content, expected, fallback_texts=None):
     if isinstance(content, dict):
         if content.get("refusal"):
             refusal = content["refusal"]
@@ -161,13 +162,27 @@ def validate_response(content, expected):
         expected_by_key[key] = item
     result = {}
     for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("id"), (int, float)):
+            row["id"] = str(row["id"])
+        if (
+            fallback_texts
+            and isinstance(row, dict)
+            and isinstance(row.get("id"), str)
+            and (not isinstance(row.get("text"), str) or not row["text"].strip())
+        ):
+            key = _normalize_id(row["id"])
+            if key in expected_by_key:
+                orig_id = expected_by_key[key]
+                fallback = fallback_texts.get(orig_id, "")
+                if fallback and str(fallback).strip():
+                    row["text"] = str(fallback).strip()
         if (
             not isinstance(row, dict)
             or not isinstance(row.get("id"), str)
             or not isinstance(row.get("text"), str)
             or not row["text"].strip()
         ):
-            raise TranslationError("处理结果存在无效编号或空文本")
+            raise TranslationError("处理结果存在无效编号或空文本", id_mismatch=True)
         key = _normalize_id(row["id"])
         if key in result:
             raise TranslationError(
@@ -412,7 +427,14 @@ def _call_api(
                         if _restriction_payload(body):
                             _raise_refusal("API 返回内容安全拦截")
                         raise TranslationError("响应内容缺少文本")
-                    return validate_response(content, [s["id"] for s in segments])
+                    fallbacks = (
+                        {s["id"]: s.get("source", "") for s in segments}
+                        if is_polish
+                        else None
+                    )
+                    return validate_response(
+                        content, [s["id"] for s in segments], fallback_texts=fallbacks
+                    )
                 except TranslationError:
                     raise
                 except (KeyError, IndexError, TypeError, ValueError) as exc:

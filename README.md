@@ -2,7 +2,7 @@
 
 Windows 本地字幕工作台：**导入音视频 → 本地转录与说话人识别 → 校对与 AI 润色 → 翻译 → 导出字幕**。
 
-当前版本：**1.0.0**。通过 CMD 启动，在本机浏览器使用，不需要安装包。音视频转录和说话人识别在本地运行；AI 润色与翻译使用你配置的兼容 OpenAI Chat Completions API。
+当前版本：**1.0.1**。通过 CMD 启动，在本机浏览器使用，不需要安装包。音视频转录和说话人识别在本地运行；AI 润色与翻译使用你配置的兼容 OpenAI Chat Completions API。
 
 ## 功能
 
@@ -12,7 +12,8 @@ Windows 本地字幕工作台：**导入音视频 → 本地转录与说话人�
 - **双通道排队**：本地处理与云端 AI 各有一条 FIFO 队列，按点击开始的顺序运行；不同任务可分别占用两个通道。云端任务内部保留批次并发、限流退避与重试。
 - **字幕校对**：支持修改文本、时间与说话人，拆分、合并、查看历史及回滚；AI 结果写入时检查版本，避免覆盖同时进行的人工修改。
 - **AI 润色与翻译**：支持全部或所选字幕、任务独立提示词、背景与术语、撤回润色、过期译文提示，以及拒译拆分和人工处理提示。自动润色并翻译默认关闭，避免未经选择产生 API 费用。
-- **预览与导出**：支持重叠字幕预览，导出 SRT、VTT、TXT 和 JSON。未翻译或过期译文可用当前原文补位。
+- **状态标签与筛选**：展示润色被拒、模型拦截、时间异常、说话人待校对等标记，可按分类筛选；筛选后点击“全选”，再对所选字幕批量润色或翻译。未选择字幕时批量操作仍处理全部。
+- **预览与导出**：支持重叠字幕预览，播放失败时显示提示；前端不再提供兼容预览生成入口。导出整个任务为 SRT、VTT、TXT 或 JSON，未翻译或过期译文使用当前原文补位，起止时间相同的历史字幕在导出副本中延展 300ms。
 
 ## 环境要求
 
@@ -26,7 +27,7 @@ Windows 本地字幕工作台：**导入音视频 → 本地转录与说话人�
 | GPU | 推荐支持 CUDA 12.8 运行时的 NVIDIA 显卡及兼容驱动；无 CUDA 时需在任务设置中明确选择 CPU，速度取决于硬件 |
 | 磁盘与网络 | Python/CUDA 依赖及模型需要数 GB 以上空间，另需为媒体缓存留出空间；首次安装和下载模型需要联网 |
 
-仓库不包含虚拟环境、模型、FFmpeg 可执行文件和前端构建产物。Python 依赖以 `requirements.lock.txt` 为准，前端依赖以 `frontend/package-lock.json` 为准。
+仓库不包含虚拟环境、模型、FFmpeg 可执行文件和前端构建产物。Python 运行依赖以 `requirements/run.lock.txt` 为准，公共核心锁在 `requirements/core.lock.txt`，测试依赖在 `requirements/dev.lock.txt`；前端依赖以 `frontend/package-lock.json` 为准。
 
 ## 快速开始
 
@@ -41,11 +42,11 @@ cd Tinglan
 
 确认 `python`、`uv` 和 `npm.cmd` 可用，然后双击 **`安装.cmd`**。安装脚本会：
 
-1. 创建项目内的 `.venv`，安装锁定的 Python 依赖。
-2. 下载 FFmpeg / FFprobe 到 `tools/`（已存在时跳过）。
-3. 安装前端依赖并构建 `frontend/dist/`。
+1. 检查环境、磁盘和运行中的进程，创建项目内的 `.venv`，按锁文件同步 Python 运行依赖，移除清单外的包。
+2. 下载并校验 FFmpeg / FFprobe 到 `tools/`（已存在时验证可运行，不覆盖）。
+3. 使用 `npm ci` 安装前端依赖，在临时目录构建成功后替换 `frontend/dist/`，保留上一份产物。
 
-如果安装失败，请查看命令窗口中的错误；修正环境或网络后重新运行。安装过程会连接 PyPI、PyTorch、npm 和 FFmpeg 下载站点。
+安装前先保存修改并停止服务、模型任务和测试。新安装至少预留 16 GiB，已有环境更新至少预留 4 GiB，用于依赖下载、缓存和构建。如果安装失败，查看命令窗口和 `.tmp/setup/<本次安装>/install.log`，修正环境或网络后重新运行。安装过程会连接 PyPI、PyTorch、npm 和 FFmpeg 下载站点。
 
 ### 2. 启动与准备模型
 
@@ -78,9 +79,10 @@ cd Tinglan
 
 ```text
 Tinglan/
-├── backend/                 # FastAPI、SQLite、任务调度、本地推理与导出
+├── backend/                 # SQLite、任务调度、本地推理、云端处理与导出
+│   └── routes/              # FastAPI 路由，按任务、字幕、设置与资源拆分
 ├── frontend/
-│   ├── src/                 # React + TypeScript 工作台
+│   ├── src/                 # React + TypeScript，组件与共享状态 Hook
 │   └── tests/               # Playwright 浏览器测试
 ├── scripts/                 # 安装、CMD 启动器、模型下载与样片工具
 ├── tests/                   # pytest 后端与回归测试
@@ -89,8 +91,8 @@ Tinglan/
 │   └── THIRD_PARTY.md       # 第三方组件与许可说明
 ├── 安装.cmd
 ├── 启动.cmd
-├── requirements.in          # 直接 Python 依赖
-├── requirements.lock.txt    # 锁定的 Python 依赖
+├── requirements/            # Python 依赖清单与固定锁文件（core / run / dev）
+├── pyproject.toml           # pytest 收集与临时目录配置
 ├── CHANGELOG.md
 └── LICENSE
 ```
@@ -99,10 +101,11 @@ Tinglan/
 
 ## 开发、更新与帮助
 
-- 开发导航和验证步骤：[开发指南](docs/DEVELOPMENT.md)。
+- 新开发者接手、修改导航、关键约定、故障定位和验证步骤：[开发指南](docs/DEVELOPMENT.md)。开发环境运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -Dev`，随后用 `scripts/check.ps1` 执行完整自动回归。
+- 空间盘点：`.venv\Scripts\python.exe scripts\space.py`。报告会识别硬链接，只列清理候选，不删除文件。模型和 GPU 依赖需要数 GB，拆分代码不会减少这些运行资源。
 - 版本记录：[CHANGELOG](CHANGELOG.md)。
 - 问题反馈：[GitHub Issues](https://github.com/Terrorist1224/Tinglan/issues)。请附复现步骤和已脱敏的错误，勿上传真实密钥、私人字幕、录音或整个 `data/`。
-- 更新代码后可重新运行 `安装.cmd` 同步依赖并构建；确认无活动任务后重启服务，再刷新浏览器。重要数据请先备份 `data/`，备份同样包含隐私与密钥，不要上传。
+- 更新前先保存修改并停止服务，再运行 `安装.cmd` 同步依赖并构建，完成后重新启动服务并刷新浏览器。开发环境使用 `scripts/install.ps1 -Dev`；普通安装不保留测试依赖。重要数据请先备份 `data/`，备份同样包含隐私与密钥，不要上传。
 
 ## 许可证
 

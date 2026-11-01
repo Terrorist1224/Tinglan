@@ -9,6 +9,7 @@ from datetime import datetime
 import socket
 import sys
 import threading
+import tempfile
 import time
 import urllib.request
 import webbrowser
@@ -38,8 +39,11 @@ def init_diagnostics():
     """Keep the fault file open for the lifetime of the interpreter."""
     log_file = None
     try:
-        folder = ROOT / ".tmp" / "runtime" / f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}"
-        folder.mkdir(parents=True)
+        runtime = ROOT / ".tmp" / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True)
+        folder = Path(tempfile.mkdtemp(
+            prefix=f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}-", dir=runtime,
+        ))
         log_file = (folder / "runtime.log").open("a", encoding="utf-8", buffering=1)
         log_file.write(
             f"Started: {datetime.now().astimezone().isoformat()}\n"

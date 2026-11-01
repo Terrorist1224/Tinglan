@@ -163,8 +163,8 @@ def test_engine_batch_split_and_partial_failure_isolation(client, task, monkeypa
     def mock_translate(settings, key, batch, context, **kwargs):
         return {s["id"]: f"Translated {s['source']}" for s in batch}
 
-    monkeypatch.setattr("backend.engine.polish_batch", mock_polish)
-    monkeypatch.setattr("backend.engine.translate_batch", mock_translate)
+    monkeypatch.setattr("backend.cloud_processing.polish_batch", mock_polish)
+    monkeypatch.setattr("backend.cloud_processing.translate_batch", mock_translate)
 
     engine.start(task, "polish_translate", settings, "mock-key")
     # 等待执行完成
@@ -197,7 +197,7 @@ def test_engine_batch_split_and_partial_failure_isolation(client, task, monkeypa
         polished_calls.extend([s["id"] for s in batch])
         return {s["id"]: f"Polished {s['source']}" for s in batch}
 
-    monkeypatch.setattr("backend.engine.polish_batch", mock_polish_recovered)
+    monkeypatch.setattr("backend.cloud_processing.polish_batch", mock_polish_recovered)
 
     engine.start(task, "polish_translate", settings, "mock-key", resume=True)
     if channel.thread:
@@ -231,7 +231,7 @@ def test_engine_translation_stage_id_mismatch_split_and_isolation(client, task, 
             raise TranslationError("预期 1 条，返回 0 条，缺失 1 个编号", id_mismatch=True)
         return {s["id"]: f"Translated {s['source']}" for s in batch}
 
-    monkeypatch.setattr("backend.engine.translate_batch", mock_translate)
+    monkeypatch.setattr("backend.cloud_processing.translate_batch", mock_translate)
 
     engine.start(task, "translate", settings, "mock-key")
     channel = engine.channels["cloud"]
@@ -277,7 +277,7 @@ def test_engine_version_conflict_prevents_overwrite_on_split(client, task, monke
                 conn.execute("UPDATE subtitles SET source='User Edited', version=version+1 WHERE id='c_0'")
         return {s["id"]: f"AI Polish {s['source']}" for s in batch}
 
-    monkeypatch.setattr("backend.engine.polish_batch", mock_polish)
+    monkeypatch.setattr("backend.cloud_processing.polish_batch", mock_polish)
 
     engine.start(task, "polish", settings, "mock-key")
     channel = engine.channels["cloud"]
@@ -289,3 +289,131 @@ def test_engine_version_conflict_prevents_overwrite_on_split(client, task, monke
     assert subs["c_0"]["source"] == "User Edited"
     # c_1 正常润色成功
     assert subs["c_1"]["source"] == "AI Polish Orig 1"
+
+
+def test_validate_response_empty_text_fallback_and_int_ids():
+    # 1. 润色流程回退：当模型将语气词整句清空（返回空文本）时，通过 fallback_texts 回退为原文
+    res = validate_response(
+        '[{"id":"s0","text":""},{"id":"s1","text":"润色后"}]',
+        ["s0", "s1"],
+        fallback_texts={"s0": "あー", "s1": "原文2"},
+    )
+    assert res == {"s0": "あー", "s1": "润色后"}
+
+    # 2. 数字型 ID 兼容：模型返回数字编号时自动转为字符串，正常匹配
+    res_num = validate_response(
+        '[{"id":0,"text":"第一句"},{"id":1,"text":"第二句"}]',
+        ["0", "1"],
+    )
+    assert res_num == {"0": "第一句", "1": "第二句"}
+
+    # 3. 非润色流程或无回退原文：空文本依然抛出 TranslationError
+    with pytest.raises(TranslationError) as exc:
+        validate_response('[{"id":"s0","text":""}]', ["s0"])
+    assert "处理结果存在无效编号或空文本" in str(exc.value)
+
+
+def test_polish_batch_empty_text_auto_fallback():
+    # 测试 polish_batch 在实际调用中，自动将 segments 的 source 作为 fallback_texts 传给校验
+    def mock_transport(req):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '[{"id":"sub_0","text":""},{"id":"sub_1","text":"有内容的润色"}]'
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(mock_transport)) as client:
+        res = polish_batch(
+            {"base_url": "https://api.example.com/v1", "model": "test-model"},
+            "key",
+            [{"id": "sub_0", "source": "んー"}, {"id": "sub_1", "source": "原句子"}],
+            [],
+            client=client,
+        )
+    # sub_0 空文本自动回退为原文 "んー"
+    assert res == {"sub_0": "んー", "sub_1": "有内容的润色"}
+
+
+def test_engine_polish_validation_error_graceful_degradation_to_translate(client, task, monkeypatch):
+    # 模拟在 polish_translate 阶段，若润色阶段抛出非 ID 错位的数据校验异常（如空文本），
+    # 流程不应全盘卡死失败，而应优雅跳过润色并进入翻译阶段
+    with db.connect() as conn:
+        conn.execute("DELETE FROM subtitles WHERE task_id=?", (task,))
+        for i in range(2):
+            conn.execute(
+                "INSERT INTO subtitles(id,task_id,start,end,source,original,language,model) VALUES(?,?,?,?,?,?,?,?)",
+                (f"deg_{i}", task, i * 1000, i * 1000 + 800, f"Source {i}", f"Source {i}", "ja", "test"),
+            )
+
+    settings = {"base_url": "https://api.example.com/v1", "model": "test-model"}
+
+    def mock_polish_fail(settings, key, batch, context, **kwargs):
+        raise TranslationError("处理结果存在无效编号或空文本")
+
+    def mock_translate_ok(settings, key, batch, context, **kwargs):
+        return {s["id"]: f"Translated {s['source']}" for s in batch}
+
+    monkeypatch.setattr("backend.cloud_processing.polish_batch", mock_polish_fail)
+    monkeypatch.setattr("backend.cloud_processing.translate_batch", mock_translate_ok)
+
+    engine.start(task, "polish_translate", settings, "mock-key")
+    channel = engine.channels["cloud"]
+    if channel.thread:
+        channel.thread.join(timeout=10)
+
+    cur_task = db.task(task)
+    assert cur_task["status"] == "complete"
+    subs = {s["id"]: s for s in db.subtitles(task)}
+    # 原文未变（跳过润色），但翻译成功生成
+    assert subs["deg_0"]["source"] == "Source 0"
+    assert subs["deg_0"]["translation"] == "Translated Source 0"
+    assert subs["deg_1"]["source"] == "Source 1"
+    assert subs["deg_1"]["translation"] == "Translated Source 1"
+
+
+def test_engine_translate_empty_text_split_and_isolation(client, task, monkeypatch):
+    # 模拟在翻译阶段发生空文本异常时，批次二分拆解并将单条失败精准隔离
+    with db.connect() as conn:
+        conn.execute("DELETE FROM subtitles WHERE task_id=?", (task,))
+        for i in range(4):
+            conn.execute(
+                "INSERT INTO subtitles(id,task_id,start,end,source,original,language,model) VALUES(?,?,?,?,?,?,?,?)",
+                (f"sp_{i}", task, i * 1000, i * 1000 + 800, f"Source {i}", f"Source {i}", "ja", "test"),
+            )
+
+    settings = {"base_url": "https://api.example.com/v1", "model": "test-model"}
+
+    def mock_translate(settings, key, batch, context, **kwargs):
+        batch_ids = [s["id"] for s in batch]
+        # sp_1 单条或者包含 sp_1 的批次抛出空文本异常
+        if "sp_1" in batch_ids:
+            if len(batch) > 1:
+                raise TranslationError("处理结果存在无效编号或空文本")
+            raise TranslationError("处理结果存在无效编号或空文本")
+        return {s["id"]: f"Translated {s['source']}" for s in batch}
+
+    monkeypatch.setattr("backend.cloud_processing.translate_batch", mock_translate)
+
+    engine.start(task, "translate", settings, "mock-key")
+    channel = engine.channels["cloud"]
+    if channel.thread:
+        channel.thread.join(timeout=10)
+
+    cur_task = db.task(task)
+    assert cur_task["status"] == "failed"
+    assert "部分批次处理失败" in cur_task["error"]
+    assert "翻译失败｜00:00:01.000—00:00:01.800｜处理结果存在无效编号或空文本" in cur_task["error"]
+
+    subs = {s["id"]: s for s in db.subtitles(task)}
+    assert subs["sp_0"]["translation"] == "Translated Source 0"
+    assert subs["sp_1"]["translation"] == ""
+    assert subs["sp_2"]["translation"] == "Translated Source 2"
+    assert subs["sp_3"]["translation"] == "Translated Source 3"

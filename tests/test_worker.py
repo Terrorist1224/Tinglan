@@ -5,6 +5,7 @@ from backend.worker import (
     display_width,
     MAX_DISPLAY_WIDTH,
     MAX_DURATION_MS,
+    normalize_audio_samples,
 )
 
 
@@ -132,3 +133,58 @@ def test_fallback_split_without_words():
     for r in rows:
         assert display_width(r["source"]) <= MAX_DISPLAY_WIDTH
         assert r["start"] < r["end"]
+
+
+def test_trailing_silence_tightened_with_words_and_buffer():
+    words = [
+        NS(start=1.2, end=1.8, word="你好"),
+        NS(start=1.9, end=2.5, word="世界"),
+    ]
+    # 模型段落结束时间戳漂移至 6.0 秒，实际发音在 2.5 秒结束
+    seg = segment(1.0, 6.0, words, text="你好世界")
+    row = segment_row(seg, 0, 200, 0)
+    assert row is not None
+    assert row["source"] == "你好世界"
+    # 起点对齐首词 1.2s，终点对齐末词 2.5s + 0.3s 阅读缓冲，彻底消除 6.0s 之前的拖沓
+    assert row["start"] == 1200
+    assert row["end"] == 2800
+
+
+def test_trailing_silence_without_words_falls_back():
+    seg = segment(1.0, 4.0, [], text="无词级时间戳")
+    row = segment_row(seg, 0, 200, 0)
+    assert row is not None
+    assert (row["start"], row["end"]) == (1000, 4000)
+
+
+def test_normalize_audio_samples():
+    import numpy as np
+
+    # 1. 弱音样本自动放大至 0.95 峰值
+    low_amp = np.array([0.05, -0.15, 0.10], dtype=np.float32)
+    normed = normalize_audio_samples(low_amp)
+    assert np.isclose(float(np.max(np.abs(normed))), 0.95, atol=1e-5)
+
+    # 2. 正常电平样本保持原样
+    normal_amp = np.array([0.3, -0.85, 0.4], dtype=np.float32)
+    unchanged = normalize_audio_samples(normal_amp)
+    assert np.allclose(unchanged, normal_amp)
+
+    # 3. 极弱底噪/接近纯静音样本不异常放大
+    near_silent = np.array([1e-5, -3e-5], dtype=np.float32)
+    silent_out = normalize_audio_samples(near_silent)
+    assert np.allclose(silent_out, near_silent)
+
+    # 4. 空数组与 None 容错
+    assert normalize_audio_samples(None) is None
+    assert len(normalize_audio_samples(np.array([], dtype=np.float32))) == 0
+
+
+def test_zero_duration_words_guarantee_minimum_duration():
+    words = [
+        NS(start=1.234, end=1.234, word="嗯"),
+    ]
+    seg = segment(1.234, 1.234, words, text="嗯")
+    rows = split_segment_rows(seg, 0, 200, 0)
+    assert len(rows) == 1
+    assert rows[0]["end"] >= rows[0]["start"] + 300

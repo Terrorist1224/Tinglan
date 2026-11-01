@@ -6,9 +6,9 @@ export default defineConfig({
   workers: 1,
   timeout: 45000,
   webServer: {
-    command: path.resolve("../.venv/Scripts/python.exe") + " -m uvicorn backend.main:app --port 8766",
+    command: `"${path.resolve("../.venv/Scripts/python.exe")}" -m uvicorn backend.main:app --port 8766`,
     url: "http://127.0.0.1:8766/api/system",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     cwd: path.resolve(".."),
     env: {
       ...process.env,

@@ -1,0 +1,6 @@
+-r core.in
+faster-whisper==1.2.1
+numpy==2.5.4
+pyannote-audio==4.0.3
+soundfile==0.14.0
+torch==2.8.0+cu128

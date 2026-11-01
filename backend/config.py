@@ -1,12 +1,12 @@
 # 全局路径与环境变量配置：
 # 强制指定 Python 与模型库离线模式，并将缓存目录重定向至项目内 .tmp/，避免污染用户全局目录。
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get("TINGLAN_DATA", ROOT / "data")).resolve()
 MODELS = ROOT / "models"
-DATA.mkdir(parents=True, exist_ok=True)
 os.environ.update(
     {
         "PYTHONUTF8": "1",
@@ -30,4 +30,4 @@ FFPROBE = (
     if (ROOT / "tools" / "ffprobe.exe").exists()
     else "ffprobe"
 )
-PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON = Path(sys.executable).resolve()

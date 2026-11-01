@@ -165,8 +165,6 @@ def preview(task):
         "-start_at_zero",
         "-i",
         str(source),
-        "-map",
-        f"0:{task['params']['audio_track']}",
     ]
     if task["probe"]["video"]:
         args += [
@@ -181,7 +179,15 @@ def preview(task):
             "-vf",
             "scale='min(1280,iw)':-2",
         ]
-    args += ["-c:a", "aac", "-movflags", "+faststart", str(temp)]
+    args += [
+        "-map",
+        f"0:{task['params']['audio_track']}",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        str(temp),
+    ]
     try:
         run(args, max(300, task["probe"]["duration"] * 3))
         temp.replace(output)

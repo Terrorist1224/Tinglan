@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import json
 import srt
 import pytest
@@ -87,7 +88,7 @@ def test_polish_and_revert_workflow(client, task, monkeypatch):
     def mock_polish(settings, key, batch, context):
         return {s["id"]: s["source"] + " [润色]" for s in batch}
 
-    monkeypatch.setattr(module, "polish_batch", mock_polish)
+    monkeypatch.setattr(cloud_processing, "polish_batch", mock_polish)
 
     settings = {"base_url": "https://example.invalid/v1", "model": "test-model"}
     engine.start(task, "polish", settings, "mock-key", ids=[subs[0]["id"], subs[1]["id"]])
@@ -126,7 +127,7 @@ def test_polish_conflict_detection(client, task, monkeypatch):
             conn.execute("UPDATE subtitles SET source='人工并发修改', version=version+1 WHERE id=?", (s0["id"],))
         return {s["id"]: "AI 迟到的润色" for s in batch}
 
-    monkeypatch.setattr(module, "polish_batch", mock_polish)
+    monkeypatch.setattr(cloud_processing, "polish_batch", mock_polish)
     settings = {"base_url": "https://example.invalid/v1", "model": "test-model"}
     engine.start(task, "polish", settings, "mock-key", ids=[s0["id"]])
     import time
@@ -332,7 +333,7 @@ def test_speaker_name_change_is_used_by_export(client, task):
 
 
 def test_single_subtitle_polish_endpoint(client, task, monkeypatch):
-    import backend.main as main_mod
+    from backend.routes import subtitles as main_mod
 
     subs = db.subtitles(task)
     s0 = subs[0]
@@ -378,7 +379,7 @@ def test_process_llm_raises_translation_error_on_batch_failure(task, monkeypatch
     def failing_batch(*args, **kwargs):
         raise TranslationError("mock-network-failure")
 
-    monkeypatch.setattr("backend.engine.translate_batch", failing_batch)
+    monkeypatch.setattr("backend.cloud_processing.translate_batch", failing_batch)
 
     with pytest.raises(TranslationError) as exc_info:
         engine.process_llm(t, "translate", settings, "test-key", None, overwrite=False)

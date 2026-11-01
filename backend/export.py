@@ -77,11 +77,18 @@ def render(rows, fmt, mode, speakers=None, allow_incomplete=True):
     if not rows:
         raise ValueError("没有可导出的字幕")
     speakers = speakers or {}
+    cleaned_rows = []
     for row in rows:
-        if row["start"] < 0 or row["end"] <= row["start"] or not row["source"].strip():
+        if row["start"] < 0 or row["end"] < row["start"] or not row["source"].strip():
             raise ExportError(
                 "存在无效时间或空原文，请校对后导出", row["id"], "invalid_subtitle"
             )
+        start = row["start"]
+        end = row["end"]
+        if end == start:
+            end = start + 300
+        cleaned_rows.append({**row, "start": start, "end": end})
+    rows = cleaned_rows
     if fmt == "json":
         return json.dumps(
             {"schema": 1, "subtitles": rows}, ensure_ascii=False, indent=2

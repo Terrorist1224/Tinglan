@@ -1,3 +1,4 @@
+from backend import local_processing
 import os
 import subprocess
 import sys
@@ -28,7 +29,7 @@ def test_worker_exit_reports_phase_code_and_log(task, monkeypatch, code, text):
         kwargs["stderr"].write(text)
         return Process()
 
-    monkeypatch.setattr(module.subprocess, "Popen", popen)
+    monkeypatch.setattr(local_processing.subprocess, "Popen", popen)
     engine = Engine()
     monkeypatch.setattr(module, "model_ready", lambda name: True)
     saved = db.subtitles(task)

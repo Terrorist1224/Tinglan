@@ -1,6 +1,6 @@
 # 第三方组件
 
-听澜代码采用根目录的 MIT 许可证。下列依赖及模型分别遵循上游许可；项目许可证不替代上游许可或模型访问条件。实际安装版本以 `requirements.lock.txt` 和 `frontend/package-lock.json` 为准，模型仓库、文件及 revision 以 `backend/models.py` 为准。
+听澜代码采用根目录的 MIT 许可证。下列依赖及模型分别遵循上游许可；项目许可证不替代上游许可或模型访问条件。实际安装版本以 `requirements/run.lock.txt` 和 `frontend/package-lock.json` 为准，模型仓库、文件及 revision 以 `backend/models.py` 为准。
 
 ## 运行组件
 

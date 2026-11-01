@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import copy
 import json
 import threading
@@ -59,7 +60,7 @@ def test_refusal_bisection_preserves_successes_and_order(task, monkeypatch, rest
             raise TranslationError("content refused", refusal=True)
         return {sid: "Translated " + sid for sid in ids}
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)
@@ -94,7 +95,7 @@ def test_single_refusal_retry_keeps_original_context_and_is_bounded(task, monkey
         contexts.append(copy.deepcopy(context))
         raise TranslationError("refused", refusal=True)
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key", ids=["r1"])
     finish(engine)
@@ -113,7 +114,7 @@ def test_technical_errors_do_not_split_or_mark_restricted(task, monkeypatch, err
         calls.append(len(batch))
         raise error
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)
@@ -152,7 +153,7 @@ def test_throttle_backoff_then_gradual_recovery(task, monkeypatch, status, drop)
         time.sleep(0.02)
         return {s["id"]: "译文" for s in batch}
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)
@@ -179,7 +180,7 @@ def test_persistent_throttle_stops_with_technical_failure(task, monkeypatch):
         calls.append(len(batch))
         raise TranslationError("HTTP 429", status_code=429, retry_after=0.01)
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)
@@ -206,7 +207,7 @@ def test_resume_skips_saved_success_and_restriction_but_new_operation_retries(ta
             engine.control(task, "pause")
         return {sid: "译文"}
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)
     current = db.task(task)
@@ -236,7 +237,7 @@ def test_new_run_replaces_old_operation_scope(task, monkeypatch):
             return {s["id"]: "译文" for s in batch if s["id"] != "r1"}
         return {s["id"]: "译文" for s in batch}
 
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key", ids=["r0", "r1"])
     finish(engine)
@@ -267,8 +268,8 @@ def test_polish_refusal_falls_back_then_splits_translation(task, monkeypatch):
             raise TranslationError("translate refused", refusal=True)
         return {s["id"]: "译文" for s in batch}
 
-    monkeypatch.setattr(engine_module, "polish_batch", polish)
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "polish_batch", polish)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "polish_translate", SETTINGS, "key")
     finish(engine)
@@ -276,6 +277,10 @@ def test_polish_refusal_falls_back_then_splits_translation(task, monkeypatch):
     assert db.task(task)["status"] == "complete"
     assert "需要人工翻译" in db.task(task)["error"]
     assert db.task(task)["params"]["progress_detail"]["restricted"] == 1
+    subs = {s["id"]: s for s in db.subtitles(task)}
+    assert "润色被模型拒绝（原文直译）" in subs["r0"]["review"]
+    assert "润色被模型拒绝（原文直译）" in subs["r1"]["review"]
+    assert "模型拦截（需人工翻译）" in subs["r2"]["review"]
 
 
 def test_polish_translate_resume_does_not_repeat_finished_stages(task, monkeypatch):
@@ -288,15 +293,15 @@ def test_polish_translate_resume_does_not_repeat_finished_stages(task, monkeypat
         engine.control(task, "pause")
         return {s["id"]: "Polished " + s["source"] for s in batch}
 
-    monkeypatch.setattr(engine_module, "polish_batch", polish)
-    monkeypatch.setattr(engine_module, "translate_batch", lambda settings, key, batch, context: {s["id"]: "译文" for s in batch})
+    monkeypatch.setattr(cloud_processing, "polish_batch", polish)
+    monkeypatch.setattr(cloud_processing, "translate_batch", lambda settings, key, batch, context: {s["id"]: "译文" for s in batch})
     engine.start(task, "polish_translate", SETTINGS, "key")
     finish(engine)
     saved = set(db.task(task)["params"]["operation"]["polished_ids"])
     assert saved
     assert db.task(task)["status"] == "paused"
     polished.clear()
-    monkeypatch.setattr(engine_module, "polish_batch", lambda settings, key, batch, context: polished.extend(s["id"] for s in batch) or {s["id"]: "Polished " + s["source"] for s in batch})
+    monkeypatch.setattr(cloud_processing, "polish_batch", lambda settings, key, batch, context: polished.extend(s["id"] for s in batch) or {s["id"]: "Polished " + s["source"] for s in batch})
     engine.start(task, "polish_translate", SETTINGS, "key", resume=True)
     finish(engine)
     assert not saved.intersection(polished)
@@ -383,7 +388,7 @@ def test_large_task_ignores_legacy_ceiling_and_never_exceeds_16(task, monkeypatc
         finally:
             with lock:
                 active -= 1
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", {**SETTINGS, "concurrency": 1}, "key")
     finish(engine)
@@ -416,7 +421,7 @@ def test_resume_retranslates_source_edited_after_previous_success(task, monkeypa
             failed = True
             raise TranslationError("network error")
         return {sid: "译文 " + batch[0]["source"]}
-    monkeypatch.setattr(engine_module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     engine = Engine()
     engine.start(task, "translate", SETTINGS, "key")
     finish(engine)

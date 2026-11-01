@@ -30,6 +30,7 @@ def connect(write=False):
 
 # 初始化数据库表结构与中断状态恢复
 def init():
+    DATA.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         # 表结构约束：
@@ -68,16 +69,13 @@ def init():
             phase TEXT NOT NULL, unit INTEGER NOT NULL, PRIMARY KEY(task_id,phase,unit));
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
         """)
-        try:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(subtitles)")}
+        if "words" not in columns:
             db.execute("ALTER TABLE subtitles ADD COLUMN words TEXT NOT NULL DEFAULT '[]'")
-        except sqlite3.OperationalError:
-            pass
-        try:
+        if "translation_provider" not in columns:
             db.execute(
                 "ALTER TABLE subtitles ADD COLUMN translation_provider TEXT NOT NULL DEFAULT ''"
             )
-        except sqlite3.OperationalError:
-            pass
         db.execute(
             "UPDATE subtitles SET translation_provider='' WHERE translation_provider IS NULL OR translation_provider NOT IN ('google','azure','llm','manual','')"
         )

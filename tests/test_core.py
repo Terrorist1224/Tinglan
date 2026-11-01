@@ -1,3 +1,4 @@
+from backend import cloud_processing
 import json
 from concurrent.futures import ThreadPoolExecutor
 import httpx
@@ -330,9 +331,8 @@ def test_export_roundtrip_and_unicode(client, task):
 
 
 def test_settings_do_not_expose_or_write_key(client, task, monkeypatch):
-    import backend.main as main
+    from backend.routes import tasks as main
 
-    monkeypatch.setattr(main, "vault_key", lambda: "")
     body = {
         "base_url": "https://example.invalid/v1",
         "model": "my-model",
@@ -465,15 +465,24 @@ def test_translation_batches_resume_and_protect_manual_text(client, task, monkey
                     "fixture",
                 ),
             )
+    from threading import Event, Lock
     calls = []
+    calls_lock = Lock()
+    first_batch_done = Event()
 
     def translate(settings, key, rows, context):
-        calls.append([r["id"] for r in rows])
-        if len(calls) == 2:
+        if len(rows) == 1:
+            first_batch_done.wait(timeout=5)
+        with calls_lock:
+            calls.append([r["id"] for r in rows])
+            fail = len(calls) == 2
+        if len(rows) == 16:
+            first_batch_done.set()
+        if fail:
             raise TranslationError("模拟网络中断")
         return {r["id"]: "公共样例" for r in rows}
 
-    monkeypatch.setattr(module, "translate_batch", translate)
+    monkeypatch.setattr(cloud_processing, "translate_batch", translate)
     settings = {"base_url": "https://example.invalid/v1", "model": "user-model"}
     engine.start(task, "translate", settings, "local-fixture")
     wait_engine(engine)
@@ -510,8 +519,16 @@ def test_export_reports_exact_problem_subtitle(client, task):
     response = client.get(f"/api/tasks/{task}/export?fmt=srt&mode=bilingual")
     assert response.status_code == 200
     assert "公共样例译文" in response.text
+    # 验证起止时间相同时自动平滑修正并导出成功
     with db.connect() as con:
         con.execute("UPDATE subtitles SET end=start WHERE id='s0'")
+    response_repaired = client.get(f"/api/tasks/{task}/export?fmt=vtt&mode=source")
+    assert response_repaired.status_code == 200
+    assert "00:00:00.000 --> 00:00:00.300" in response_repaired.text
+
+    # 验证空原文时精准拦截报错
+    with db.connect() as con:
+        con.execute("UPDATE subtitles SET source='' WHERE id='s0'")
     response = client.get(f"/api/tasks/{task}/export?fmt=vtt&mode=source")
     assert response.status_code == 400
     assert response.json()["subtitle_id"] == "s0"
@@ -547,7 +564,7 @@ def test_delete_task_allows_missing_folder(client, task):
 
 
 def test_delete_task_protects_running_task(client, task, monkeypatch):
-    import backend.main as main
+    from backend.routes import tasks as main
 
     monkeypatch.setattr(main.engine, "active", task)
     response = client.delete(f"/api/tasks/{task}", headers=H)
@@ -560,7 +577,7 @@ def test_delete_task_restores_folder_when_database_fails(task, monkeypatch):
     from backend.config import DATA
     import contextlib
     import sqlite3
-    import backend.main as main
+    from backend.routes import tasks as main
 
     folder = DATA / task
     trash = DATA / ("deleted-" + task)
@@ -583,7 +600,7 @@ def test_delete_task_restores_folder_when_database_fails(task, monkeypatch):
 def test_delete_task_keeps_records_when_folder_cannot_be_isolated(task, monkeypatch):
     from backend.config import DATA
     from pathlib import Path
-    import backend.main as main
+    from backend.routes import tasks as main
 
     folder = DATA / task
 

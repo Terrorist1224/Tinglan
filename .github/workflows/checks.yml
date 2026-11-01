@@ -1,0 +1,58 @@
+name: Windows checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      UV_CACHE_DIR: ${{ github.workspace }}/.tmp/uv-cache
+      npm_config_cache: ${{ github.workspace }}/.tmp/npm-cache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: '0.11.28'
+          enable-cache: false
+      - name: Install core and test dependencies
+        run: |
+          uv venv --python 3.12 .venv
+          if ($LASTEXITCODE) { throw 'Python environment creation failed' }
+          uv pip sync --python .venv/Scripts/python.exe requirements/dev.lock.txt --index https://pypi.org/simple
+          if ($LASTEXITCODE) { throw 'Test dependency installation failed' }
+          npm.cmd ci --prefix frontend
+          if ($LASTEXITCODE) { throw 'Frontend dependency installation failed' }
+      - name: Prepare FFmpeg
+        run: |
+          New-Item -ItemType Directory -Path .tmp -Force | Out-Null
+          Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile .tmp/ffmpeg.zip -TimeoutSec 180
+          .venv/Scripts/python.exe scripts/setup_tools.py .tmp/ffmpeg.zip tools
+          if ($LASTEXITCODE) { throw 'FFmpeg verification failed' }
+      - name: Prepare browser
+        working-directory: frontend
+        run: |
+          npx.cmd playwright install chrome
+          if ($LASTEXITCODE) { throw 'Browser installation failed' }
+      - name: Run deterministic checks
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1

@@ -590,3 +590,113 @@ test("多选导入逐项创建任务，排队状态按服务端位置显示", as
   await expect(page.locator(".queue-badge-yellow")).toHaveText("2");
   await expect(page.getByRole("button", { name: "退出队列" })).toBeVisible();
 });
+
+
+test("字幕精细化标签展示、多维筛选与媒体不兼容占位", async ({ page }) => {
+  const taskWithBadges = {
+    id: "badge-task",
+    name: "测试标签.mp4",
+    status: "complete",
+    phase: "",
+    progress: 100,
+    error: "",
+    control: "",
+    params: { audio_track: 0 },
+    subtitles: [
+      {
+        id: "sub-1",
+        task_id: "badge-task",
+        start: 0,
+        end: 2000,
+        source: "第一句正常文字",
+        original: "第一句正常文字",
+        translation: "First normal line",
+        translation_provider: "llm",
+        speaker: "",
+        language: "zh",
+        version: 1,
+        source_version: 1,
+        translated_version: 1,
+        manual_translation: 0,
+        confirmed: 0,
+        review: "润色被模型拒绝（原文直译）",
+        model: "llm",
+        alignment: "sentence",
+      },
+      {
+        id: "sub-2",
+        task_id: "badge-task",
+        start: 2000,
+        end: 2000,
+        source: "第二句时间相同",
+        original: "第二句时间相同",
+        translation: "",
+        translation_provider: "",
+        speaker: "",
+        language: "zh",
+        version: 0,
+        source_version: 0,
+        translated_version: -1,
+        manual_translation: 0,
+        confirmed: 0,
+        review: "",
+        model: "llm",
+        alignment: "sentence",
+      },
+      {
+        id: "sub-3",
+        task_id: "badge-task",
+        start: 3000,
+        end: 5000,
+        source: "第三句策略拦截",
+        original: "第三句策略拦截",
+        translation: "",
+        translation_provider: "",
+        speaker: "",
+        language: "zh",
+        version: 0,
+        source_version: 0,
+        translated_version: -1,
+        manual_translation: 0,
+        confirmed: 0,
+        review: "模型拦截（需人工翻译）",
+        model: "llm",
+        alignment: "sentence",
+      },
+    ],
+    probe: { duration: 5, audio: [{ index: 0, default: true }], subtitles: [], video: null },
+  };
+
+  await page.route("**/api/tasks", (route) => route.fulfill({ json: [taskWithBadges] }));
+  await page.route("**/api/tasks/badge-task", (route) => route.fulfill({ json: taskWithBadges }));
+  await page.route("**/api/tasks/badge-task/media*", (route) => route.abort("failed"));
+  await page.route("**/api/system", (route) => route.fulfill({ json: { privacy: "", disk_free_gb: 1, models: [], download: { status: "", model: "", error: "" }, ffmpeg: true, ffprobe: true, versions: {} } }));
+  await page.route("**/api/settings", (route) => route.fulfill({ json: { base_url: "https://example.invalid/v1", model: "m", has_key: false, session_only: false, default_diarize: true, default_auto_polish_translate: false } }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /测试标签.mp4/ }).first().click();
+
+  // 1. 验证标签徽标渲染
+  await expect(page.locator(".tag-badge.badge-warning", { hasText: "润色被拒" })).toBeVisible();
+  await expect(page.locator(".tag-badge.badge-danger", { hasText: "时间异常" })).toBeVisible();
+  await expect(page.locator(".tag-badge.badge-danger", { hasText: "模型拦截" })).toBeVisible();
+
+  // 2. 验证多维筛选功能
+  const filterSelect = page.getByRole("combobox", { name: "筛选字幕" });
+  await filterSelect.selectOption("polish_refused");
+  await expect(page.locator(".subtitle-row", { hasText: "第一句正常文字" })).toBeVisible();
+  await expect(page.locator(".subtitle-row", { hasText: "第二句时间相同" })).toHaveCount(0);
+  await expect(page.locator(".subtitle-row", { hasText: "第三句策略拦截" })).toHaveCount(0);
+
+  await filterSelect.selectOption("time_issue");
+  await expect(page.locator(".subtitle-row", { hasText: "第二句时间相同" })).toBeVisible();
+  await expect(page.locator(".subtitle-row", { hasText: "第一句正常文字" })).toHaveCount(0);
+
+  await filterSelect.selectOption("restricted");
+  await expect(page.locator(".subtitle-row", { hasText: "第三句策略拦截" })).toBeVisible();
+  await expect(page.locator(".subtitle-row", { hasText: "第一句正常文字" })).toHaveCount(0);
+
+  // 3. 验证媒体不兼容友好占位
+  await expect(page.getByText("当前格式无法在浏览器中直接播放预览")).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成兼容预览" })).toHaveCount(0);
+});

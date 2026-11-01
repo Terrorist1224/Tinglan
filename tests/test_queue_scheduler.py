@@ -146,6 +146,7 @@ def test_transcribe_triggers_auto_cloud_and_next_local(task, monkeypatch):
     local_b = insert_task("B", subtitles=False)
     gate = threading.Event()
     cloud_started = threading.Event()
+    local_worker_gate = threading.Event()
     phases = []
     monkeypatch.setattr(engine_module, "model_ready", lambda name: True)
     monkeypatch.setattr(engine_module.Engine, "resolve_settings", lambda self: ({"base_url": "https://example.invalid/v1", "model": "test"}, "key"))
@@ -155,23 +156,19 @@ def test_transcribe_triggers_auto_cloud_and_next_local(task, monkeypatch):
         if phase == "transcribe" and not db.subtitles(task["id"]):
             with db.connect(write=True) as conn:
                 conn.execute("INSERT INTO subtitles(id,task_id,start,end,source,original) VALUES(?,?,?,?,?,?)", (db.ident(), task["id"], 0, 1000, "hello", "hello"))
+        if task["name"] == "A":
+            local_worker_gate.wait(5)
 
-    def fake_translate(settings, key, batch, context):
-        cloud_started.set()
-        phases.append(("cloud", "start", batch[0]["id"]))
-        gate.wait(5)
-        return {r["id"]: "ok" for r in batch}
-
-    monkeypatch.setattr(engine_module.Engine, "worker", fake_worker)
     def fake_process(self, task, phase, settings, key, ids, overwrite):
         cloud_started.set()
         phases.append(("cloud", "start", phase))
         gate.wait(5)
+    monkeypatch.setattr(engine_module.Engine, "worker", fake_worker)
     monkeypatch.setattr(engine_module.Engine, "process_llm", fake_process)
     engine = Engine()
     assert engine.start(local_a, "transcribe")["status"] == "started"
     assert engine.start(local_b, "transcribe")["status"] == "queued"
-    time.sleep(0.1)
+    local_worker_gate.set()
     assert cloud_started.wait(5)
     gate.set()
     assert engine.wait_idle(timeout=5)

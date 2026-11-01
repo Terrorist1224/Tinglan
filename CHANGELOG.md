@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-01
+
+### Fixed
+
+- 修复在无 NumPy 的轻量测试环境（如 GitHub Actions CI）下执行音频归一化测试时报 ModuleNotFoundError 的问题；在未安装 NumPy 时自动优雅跳过该测试。
+- 修复双通道调度测试中，本地子任务极速完成导致的排队状态断言偶发竞态。
+
 ## [1.0.1] - 2026-11-01
 
 ### Added
@@ -65,6 +72,7 @@
 - 上传范围排除模型权重、FFmpeg 二进制、虚拟环境、数据库、密钥、私人录音、日志与临时产物。
 - 保留本机绑定、来源校验、数据变更请求标记和安全响应头，不将工作台作为公网服务部署。
 
-[Unreleased]: https://github.com/Terrorist1224/Tinglan/compare/发布1.0.1...HEAD
+[Unreleased]: https://github.com/Terrorist1224/Tinglan/compare/发布1.0.2...HEAD
+[1.0.2]: https://github.com/Terrorist1224/Tinglan/compare/发布1.0.1...发布1.0.2
 [1.0.1]: https://github.com/Terrorist1224/Tinglan/compare/发布1.0.0...发布1.0.1
 [1.0.0]: https://github.com/Terrorist1224/Tinglan/tree/发布1.0.0

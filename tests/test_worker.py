@@ -158,7 +158,8 @@ def test_trailing_silence_without_words_falls_back():
 
 
 def test_normalize_audio_samples():
-    import numpy as np
+    import pytest
+    np = pytest.importorskip("numpy")
 
     # 1. 弱音样本自动放大至 0.95 峰值
     low_amp = np.array([0.05, -0.15, 0.10], dtype=np.float32)
